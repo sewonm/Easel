@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArtMentor AR</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: transparent;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+    }
+
+    #ar-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+    }
+
+    #trace-overlay, #reference-overlay, #model3d-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+
+    #trace-overlay img, #reference-overlay img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      opacity: 0.7;
+    }
+
+    #model3d-container {
+      background: transparent;
+    }
+
+    #mode-indicator {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: bold;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    #status-indicator {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 15px;
+      font-size: 12px;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    .loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      color: white;
+      font-size: 18px;
+    }
+
+    .error {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      color: #ff6b6b;
+      font-size: 16px;
+      text-align: center;
+    }
+
+    /* 3D model canvas styles */
+    #model3d-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Trace overlay specific styles */
+    .trace-active {
+      filter: drop-shadow(0 0 5px #00ff00);
+    }
+
+    /* Reference image overlay styles */
+    .reference-active {
+      border: 2px solid rgba(255, 255, 255, 0.5);
+      border-radius: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ar-container">
+    <!-- Mode indicator -->
+    <div id="mode-indicator">
+      <span id="mode-text">Loading...</span>
+    </div>
+
+    <!-- Status indicator -->
+    <div id="status-indicator">
+      <span id="status-text">Initializing...</span>
+    </div>
+
+    <!-- Trace projection overlay -->
+    <div id="trace-overlay">
+      <img id="trace-image" src="" alt="Trace Overlay" />
+    </div>
+
+    <!-- Reference image overlay -->
+    <div id="reference-overlay">
+      <img id="reference-image" src="" alt="Reference Image" />
+    </div>
+
+    <!-- 3D model container -->
+    <div id="model3d-container">
+      <canvas id="model3d-canvas"></canvas>
+    </div>
+  </div>
+
+  <!-- Three.js for 3D model rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/loaders/GLTFLoader.js"></script>
+
+  <script>
+    class ArtMentorAR {
+      constructor() {
+        this.currentMode = '<%= currentMode %>' || 'trace';
+        console.log('Initial mode from server:', '<%= currentMode %>');
+        this.updateInterval = null;
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.model = null;
+
+        this.init();
+      }
+
+      init() {
+        this.updateModeDisplay();
+        this.setupUpdateLoop();
+
+        // Initialize 3D renderer
+        if (this.currentMode === 'model3d') {
+          this.init3DRenderer();
+        }
+      }
+
+      updateModeDisplay() {
+        const modeText = document.getElementById('mode-text');
+        const statusText = document.getElementById('status-text');
+
+        const modeNames = {
+          trace: 'Trace Projection',
+          reference: 'Reference Image',
+          model3d: '3D Model'
+        };
+
+        console.log('Current mode:', this.currentMode, 'Available modes:', Object.keys(modeNames));
+        modeText.textContent = modeNames[this.currentMode] || `Unknown (${this.currentMode})`;
+        statusText.textContent = 'Ready';
+      }
+
+      setupUpdateLoop() {
+        // Check for updates every 500ms
+        this.updateInterval = setInterval(() => {
+          this.checkForUpdates();
+        }, 500);
+
+        // Initial check and immediate display
+        this.checkForUpdates();
+
+        // Force display current mode content immediately
+        setTimeout(() => {
+          this.forceDisplayCurrentMode();
+        }, 1000);
+      }
+
+      async checkForUpdates() {
+        try {
+          const response = await fetch('/api/ar-overlay');
+
+          if (!response.ok) {
+            throw new Error('Failed to fetch AR overlay data');
+          }
+
+          const data = await response.json();
+
+          if (data.mode !== this.currentMode) {
+            this.currentMode = data.mode;
+            this.updateModeDisplay();
+            this.switchOverlayMode(data.mode);
+          }
+
+          if (data.hasOverlay) {
+            await this.updateOverlay(data.mode);
+          }
+
+          document.getElementById('status-text').textContent = 'Active';
+        } catch (error) {
+          console.error('Error checking for updates:', error);
+          document.getElementById('status-text').textContent = 'Error';
+        }
+      }
+
+      switchOverlayMode(mode) {
+        // Hide all overlays
+        document.getElementById('trace-overlay').style.display = 'none';
+        document.getElementById('reference-overlay').style.display = 'none';
+        document.getElementById('model3d-container').style.display = 'none';
+
+        // Show appropriate overlay
+        switch (mode) {
+          case 'trace':
+            document.getElementById('trace-overlay').style.display = 'block';
+            break;
+          case 'reference':
+            document.getElementById('reference-overlay').style.display = 'block';
+            break;
+          case 'model3d':
+            document.getElementById('model3d-container').style.display = 'block';
+            if (!this.renderer) {
+              this.init3DRenderer();
+            }
+            break;
+        }
+      }
+
+      async forceDisplayCurrentMode() {
+        // Switch to current mode and force display content
+        this.switchOverlayMode(this.currentMode);
+
+        // Try to update overlay regardless of hasOverlay status
+        switch (this.currentMode) {
+          case 'trace':
+            console.log('Forcing trace overlay display...');
+            await this.updateTraceOverlay();
+            break;
+          case 'reference':
+            console.log('Forcing reference overlay display...');
+            await this.updateReferenceOverlay();
+            break;
+          case 'model3d':
+            console.log('Forcing 3D model display...');
+            await this.update3DModel();
+            break;
+        }
+      }
+
+      async updateOverlay(mode) {
+        switch (mode) {
+          case 'trace':
+            await this.updateTraceOverlay();
+            break;
+          case 'reference':
+            await this.updateReferenceOverlay();
+            break;
+          case 'model3d':
+            await this.update3DModel();
+            break;
+        }
+      }
+
+      async updateTraceOverlay() {
+        try {
+          const response = await fetch('/api/svg-overlay');
+
+          if (response.ok) {
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+
+            const traceImage = document.getElementById('trace-image');
+            traceImage.src = imageUrl;
+            traceImage.onload = () => {
+              traceImage.classList.add('trace-active');
+            };
+            console.log('SVG trace overlay updated');
+          } else {
+            console.log('No SVG overlay available');
+          }
+        } catch (error) {
+          console.error('Error updating trace overlay:', error);
+        }
+      }
+
+      async updateReferenceOverlay() {
+        try {
+          const response = await fetch('/api/reference-image');
+
+          if (response.ok) {
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+
+            const referenceImage = document.getElementById('reference-image');
+            referenceImage.src = imageUrl;
+            referenceImage.onload = () => {
+              referenceImage.classList.add('reference-active');
+            };
+            console.log('Reference image overlay updated');
+          } else {
+            console.log('No reference image available');
+          }
+        } catch (error) {
+          console.error('Error updating reference overlay:', error);
+        }
+      }
+
+      init3DRenderer() {
+        const canvas = document.getElementById('model3d-canvas');
+        const container = document.getElementById('model3d-container');
+
+        // Scene setup
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: canvas,
+          alpha: true,
+          antialias: true
+        });
+
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.setClearColor(0x000000, 0); // Transparent background
+
+        // Lighting setup
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(1, 1, 1);
+
+        this.scene.add(ambientLight);
+        this.scene.add(directionalLight);
+
+        // Camera position
+        this.camera.position.z = 5;
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+          this.camera.aspect = window.innerWidth / window.innerHeight;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start render loop
+        this.animate();
+      }
+
+      async update3DModel() {
+        if (!this.scene) return;
+
+        try {
+          const response = await fetch('/api/model-scene');
+
+          if (response.ok) {
+            const sceneData = await response.json();
+
+            if (sceneData && sceneData.model) {
+              await this.load3DModel(sceneData);
+            }
+          } else {
+            console.log('No 3D model scene data available');
+          }
+        } catch (error) {
+          console.error('Error updating 3D model:', error);
+        }
+      }
+
+      async load3DModel(sceneData) {
+        try {
+          // Remove existing model
+          if (this.model) {
+            this.scene.remove(this.model);
+          }
+
+          // Create a simple cube for now (since we have a basic cube in the backend)
+          if (sceneData.model.type === 'gltf') {
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshPhongMaterial({ color: 0xcc2222 });
+            this.model = new THREE.Mesh(geometry, material);
+
+            // Apply transform from scene data
+            if (sceneData.transform) {
+              const pos = sceneData.transform.position;
+              this.model.position.set(pos.x, pos.y, pos.z);
+
+              const scale = sceneData.transform.scale;
+              this.model.scale.set(scale.x, scale.y, scale.z);
+            }
+
+            this.scene.add(this.model);
+            console.log('3D model loaded and displayed');
+          }
+        } catch (error) {
+          console.error('Error loading 3D model:', error);
+        }
+      }
+
+      animate() {
+        if (!this.renderer || !this.scene || !this.camera) return;
+
+        requestAnimationFrame(() => this.animate());
+
+        // Rotate model if present
+        if (this.model) {
+          this.model.rotation.y += 0.01;
+        }
+
+        this.renderer.render(this.scene, this.camera);
+      }
+
+      // Clean up resources
+      destroy() {
+        if (this.updateInterval) {
+          clearInterval(this.updateInterval);
+        }
+
+        if (this.renderer) {
+          this.renderer.dispose();
+        }
+      }
+    }
+
+    // Initialize ArtMentor AR when page loads
+    let artMentorAR;
+
+    window.addEventListener('load', () => {
+      artMentorAR = new ArtMentorAR();
+    });
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+      if (artMentorAR) {
+        artMentorAR.destroy();
+      }
+    });
+
+    // Handle visibility changes (when glasses display turns off/on)
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (artMentorAR && artMentorAR.updateInterval) {
+          clearInterval(artMentorAR.updateInterval);
+        }
+      } else {
+        if (artMentorAR) {
+          artMentorAR.setupUpdateLoop();
+        }
+      }
+    });
+  </script>
+</body>
+</html>
