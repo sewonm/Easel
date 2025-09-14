@@ -7,6 +7,7 @@ import multer from 'multer';
 import { TraceProjectionService } from './services/TraceProjectionService';
 import { ReferenceImageService } from './services/ReferenceImageService';
 import { Model3DService } from './services/Model3DService';
+import { BitmapGenerator } from './services/BitmapGenerator';
 
 /**
  * Interface representing app mode states
@@ -246,9 +247,9 @@ class ArtMentorApp extends AppServer {
         break;
     }
 
-    // Convert to BMP and return hex
+    // Convert to BMP and return base64
     const bmp = BitmapGenerator.convertToBMP(canvas);
-    return BitmapGenerator.bmpToHex(bmp);
+    return bmp.toString('base64');
   }
 
   /**
